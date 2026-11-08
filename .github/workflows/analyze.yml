@@ -1,0 +1,21 @@
+name: Analyze (no build)
+on:
+  push:
+    branches: [ 'v*', 'dev*' ]
+  workflow_dispatch:
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+      - run: flutter pub get
+      - name: flutter analyze
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings > an.txt 2>&1
+          cat an.txt
+          E=$(grep -c " error " an.txt || true)
+          echo "::notice title=analyze::errors=$E"
+          [ "$E" = "0" ]
