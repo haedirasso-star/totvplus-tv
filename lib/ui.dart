@@ -1,219 +1,166 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:audioplayers/audioplayers.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-/// ════════════════════════════════════════════════════════════════
-///  هوية بصرية خفيفة + أدوات تنقّل بالريموت (D-pad)
-/// ════════════════════════════════════════════════════════════════
-
-// ── جهات التواصل ──
-const String kWhatsApp = '9647714415816';            // واتساب الدعم/الشراء
-const String kWhatsAppDisplay = '07714415816';
-const String kTelegram = 'https://t.me/O_2828';      // قناة تلجرام
-
-Future<void> openUrl(String url) async {
-  try { await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication); } catch (_) {}
-}
-
+// ════════════════════════════════════════════════════════════════════
+//  هوية الشاشة: داكنة · ذهبي TOTV · أحجام مضغوطة (10 أقدام بلا تضخيم)
+//  كل عنصر قابل للضغط = TvFocus: يكبر قليلاً ويأخذ إطاراً ذهبياً عند التركيز
+// ════════════════════════════════════════════════════════════════════
 class K {
-  static const bg     = Color(0xFF0A0A0C);
-  static const bg2    = Color(0xFF121216);
-  static const card   = Color(0xFF1A1A20);
-  static const gold   = Color(0xFFF5A623);
-  static const goldDim= Color(0xFFB07A18);
-  static const text   = Color(0xFFF5F5F7);
-  static const sub    = Color(0xFF9A9AA6);
-  static const dim    = Color(0xFF5A5A66);
+  static const bg = Color(0xFF07070A);
+  static const panel = Color(0xFF101015);
+  static const card = Color(0xFF17171E);
+  static const line = Color(0xFF24242E);
+  static const gold = Color(0xFFF5B82E);
+  static const red = Color(0xFFE5484D);
+  static const green = Color(0xFF2FBF71);
+  static const t1 = Color(0xFFF4F4F6);
+  static const t2 = Color(0xFFA3A3B2);
+  static const t3 = Color(0xFF6B6B7A);
 
-  static TextStyle ar({double s = 16, FontWeight w = FontWeight.w500, Color c = text, double? ls}) =>
-      GoogleFonts.cairo(fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
-  static TextStyle en({double s = 16, FontWeight w = FontWeight.w700, Color c = text, double? ls}) =>
-      GoogleFonts.cinzel(fontSize: s, fontWeight: w, color: c, letterSpacing: ls);
+  static TextStyle s(double size, {FontWeight w = FontWeight.w600, Color c = t1, double h = 1.3}) =>
+      TextStyle(fontSize: size, fontWeight: w, color: c, height: h);
 }
 
-class Sfx {
-  static final _p = AudioPlayer();
-  static bool on = true;
-  static Future<void> _play(String a, {double v = 1}) async {
-    if (!on) return;
-    try {
-      final p = AudioPlayer();
-      await p.setReleaseMode(ReleaseMode.release);
-      await p.setVolume(v);
-      await p.play(AssetSource('sounds/$a'));
-      p.onPlayerComplete.listen((_) { try { p.dispose(); } catch (_) {} });
-    } catch (_) {}
-  }
-  static void intro() => _play('intro.wav', v: 0.9);
-  static void tap()   => _play('tap.wav', v: 0.4);
-  static void zap()   => _play('zap.wav', v: 0.5); // تنقّل القنوات
-}
-
-/// عنصر قابل للتركيز بالريموت — يكبر ويُضيء عند التركيز، ويُفعّل بزر OK
+/// عنصر قابل للتركيز بالريموت (OK = onTap)
 class TvFocus extends StatefulWidget {
-  final Widget Function(bool focused) builder;
-  final VoidCallback onSelect;
+  final Widget child;
+  final VoidCallback? onTap;
   final bool autofocus;
-  final double scale;
-  const TvFocus({
-    super.key,
-    required this.builder,
-    required this.onSelect,
-    this.autofocus = false,
-    this.scale = 1.08,
-  });
-  @override
-  State<TvFocus> createState() => _TvFocusState();
+  final double radius, scale;
+  final FocusNode? node;
+  final ValueChanged<bool>? onFocus;
+  const TvFocus({super.key, required this.child, this.onTap, this.autofocus = false, this.radius = 10, this.scale = 1.06,
+      this.node, this.onFocus});
+  @override State<TvFocus> createState() => _TvFocusState();
 }
 
 class _TvFocusState extends State<TvFocus> {
   bool _f = false;
-
   @override
-  Widget build(BuildContext context) {
-    return FocusableActionDetector(
-      autofocus: widget.autofocus,
-      onShowFocusHighlight: (v) => setState(() => _f = v),
-      onFocusChange: (v) { if (v) Sfx.tap(); },
-      shortcuts: const {
-        SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
-        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-        SingleActivator(LogicalKeyboardKey.gameButtonA): ActivateIntent(),
-      },
-      actions: {
-        ActivateIntent: CallbackAction<ActivateIntent>(
-          onInvoke: (_) { widget.onSelect(); return null; }),
-      },
-      child: GestureDetector(
-        onTap: widget.onSelect,
-        child: AnimatedScale(
-          scale: _f ? widget.scale : 1.0,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          child: widget.builder(_f),
-        ),
-      ),
-    );
-  }
-}
-
-/// بطاقة بوستر (فيلم/مسلسل) قابلة للتركيز
-class PosterCard extends StatelessWidget {
-  final String title;
-  final String logo;
-  final VoidCallback onSelect;
-  final bool autofocus;
-  final double w, h;
-  const PosterCard({
-    super.key,
-    required this.title,
-    required this.logo,
-    required this.onSelect,
-    this.autofocus = false,
-    this.w = 150,
-    this.h = 220,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocus(
-      autofocus: autofocus,
-      onSelect: onSelect,
-      builder: (f) => Container(
-        width: w,
-        margin: const EdgeInsets.symmetric(horizontal: 7),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: f ? K.gold : Colors.transparent, width: 2.5),
-          boxShadow: f
-              ? [BoxShadow(color: K.gold.withOpacity(0.4), blurRadius: 22, spreadRadius: 1)]
-              : null,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(
-              height: h,
-              width: w,
-              child: logo.isEmpty
-                  ? _ph()
-                  : CachedNetworkImage(
-                      imageUrl: logo,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => _ph(),
-                      errorWidget: (_, __, ___) => _ph()),
-            ),
-            Container(
-              width: w,
-              color: f ? K.gold.withOpacity(0.14) : K.card,
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
-              child: Text(title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: K.ar(s: 12.5, w: FontWeight.w600, c: f ? K.gold : K.text)),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  Widget _ph() => Container(
-        color: K.card,
-        child: const Center(child: Icon(Icons.movie_outlined, color: K.dim, size: 34)),
-      );
-}
-
-/// بطاقة قناة مباشرة (شعار مربّع)
-class LiveCard extends StatelessWidget {
-  final String title;
-  final String logo;
-  final VoidCallback onSelect;
-  final bool autofocus;
-  const LiveCard({
-    super.key,
-    required this.title,
-    required this.logo,
-    required this.onSelect,
-    this.autofocus = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocus(
-      autofocus: autofocus,
-      onSelect: onSelect,
-      builder: (f) => Container(
-        width: 150,
-        margin: const EdgeInsets.symmetric(horizontal: 7),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: f ? K.gold.withOpacity(0.12) : K.card,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: f ? K.gold : Colors.white10, width: 2),
-        ),
-        child: Column(children: [
-          SizedBox(
-            height: 78,
-            child: logo.isEmpty
-                ? const Icon(Icons.live_tv_rounded, color: K.dim, size: 38)
-                : CachedNetworkImage(
-                    imageUrl: logo,
-                    fit: BoxFit.contain,
-                    errorWidget: (_, __, ___) =>
-                        const Icon(Icons.live_tv_rounded, color: K.dim, size: 38)),
+  Widget build(BuildContext context) => Focus(
+    focusNode: widget.node,
+    autofocus: widget.autofocus,
+    onFocusChange: (v) {
+      setState(() => _f = v);
+      widget.onFocus?.call(v);
+      if (v) Scrollable.ensureVisible(context, alignment: .5, duration: const Duration(milliseconds: 160));
+    },
+    onKeyEvent: (_, e) {
+      if (e is KeyDownEvent && (e.logicalKey == LogicalKeyboardKey.select || e.logicalKey == LogicalKeyboardKey.enter ||
+          e.logicalKey == LogicalKeyboardKey.numpadEnter || e.logicalKey == LogicalKeyboardKey.gameButtonA)) {
+        widget.onTap?.call();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    },
+    child: GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _f ? widget.scale : 1,
+        duration: const Duration(milliseconds: 130),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(widget.radius + 2),
+            border: Border.all(color: _f ? K.gold : Colors.transparent, width: 2),
+            boxShadow: _f ? [BoxShadow(color: K.gold.withValues(alpha: .25), blurRadius: 14)] : null,
           ),
-          const SizedBox(height: 8),
-          Text(title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: K.ar(s: 12, w: FontWeight.w600, c: f ? K.gold : K.text)),
-        ]),
+          child: ClipRRect(borderRadius: BorderRadius.circular(widget.radius), child: widget.child),
+        ),
       ),
-    );
+    ),
+  );
+}
+
+/// صورة شبكية خفيفة (حجم الذاكرة مضبوط حسب حجم العرض)
+class NetImg extends StatelessWidget {
+  final String url;
+  final double? w, h;
+  final BoxFit fit;
+  final String fallback;
+  const NetImg(this.url, {super.key, this.w, this.h, this.fit = BoxFit.cover, this.fallback = ''});
+  @override
+  Widget build(BuildContext context) {
+    final ph = Container(width: w, height: h, color: K.card, alignment: Alignment.center,
+        child: Padding(padding: const EdgeInsets.all(6),
+            child: Text(fallback, textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis, style: K.s(11, c: K.t2))));
+    if (url.isEmpty) return ph;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    return CachedNetworkImage(imageUrl: url, width: w, height: h, fit: fit,
+        memCacheWidth: w == null ? null : (w! * dpr).round(),
+        fadeInDuration: const Duration(milliseconds: 120),
+        placeholder: (_, __) => Container(width: w, height: h, color: K.card),
+        errorWidget: (_, __, ___) => ph);
   }
+}
+
+/// صف أفقي بعنوان
+class Rail extends StatelessWidget {
+  final String title;
+  final List<Widget> items;
+  final double height;
+  const Rail({super.key, required this.title, required this.items, required this.height});
+  @override
+  Widget build(BuildContext context) => items.isEmpty ? const SizedBox.shrink() : Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(padding: const EdgeInsets.fromLTRB(4, 14, 4, 8), child: Text(title, style: K.s(15, w: FontWeight.w800))),
+      SizedBox(height: height, child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        itemBuilder: (_, i) => items[i],
+      )),
+    ],
+  );
+}
+
+/// بطاقة بوستر (فيلم/مسلسل)
+class PosterCard extends StatelessWidget {
+  final Map<String, dynamic> m;
+  final String img;
+  final VoidCallback onTap;
+  final bool autofocus;
+  static const w = 104.0, h = 152.0;
+  const PosterCard({super.key, required this.m, required this.img, required this.onTap, this.autofocus = false});
+  @override
+  Widget build(BuildContext context) => SizedBox(width: w, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    TvFocus(onTap: onTap, autofocus: autofocus, child: NetImg(img, w: w, h: h, fallback: '${m['name'] ?? ''}')),
+    const SizedBox(height: 5),
+    Text('${m['name'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(11.5, c: K.t2)),
+  ]));
+}
+
+/// بطاقة قناة
+class ChannelCard extends StatelessWidget {
+  final Map<String, dynamic> m;
+  final String img;
+  final VoidCallback onTap;
+  final bool autofocus;
+  static const w = 128.0, h = 76.0;
+  const ChannelCard({super.key, required this.m, required this.img, required this.onTap, this.autofocus = false});
+  @override
+  Widget build(BuildContext context) => SizedBox(width: w, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    TvFocus(onTap: onTap, autofocus: autofocus, child: Container(width: w, height: h, color: K.card, padding: const EdgeInsets.all(10),
+        child: NetImg(img, fit: BoxFit.contain, fallback: '${m['name'] ?? ''}'))),
+    const SizedBox(height: 5),
+    Text('${m['name'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(11, c: K.t2)),
+  ]));
+}
+
+void toast(BuildContext c, String m, {bool err = false}) {
+  ScaffoldMessenger.of(c).showSnackBar(SnackBar(
+    behavior: SnackBarBehavior.floating, width: 520,
+    backgroundColor: err ? K.red : K.card,
+    content: Text(m, textAlign: TextAlign.center, style: K.s(14)),
+  ));
+}
+
+class Loading extends StatelessWidget {
+  const Loading({super.key});
+  @override
+  Widget build(BuildContext context) => const Center(child: SizedBox(width: 28, height: 28,
+      child: CircularProgressIndicator(strokeWidth: 2.4, color: K.gold)));
 }

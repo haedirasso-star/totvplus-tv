@@ -1,210 +1,215 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+
+import 'core.dart';
 import 'ui.dart';
 
-/// مشغّل فيديو خفيف لشاشات التلفاز — تحكّم كامل بالريموت
-class PlayerPage extends StatefulWidget {
-  final String url;
-  final String? fallbackUrl;
+// ════════════════════════════════════════════════════════════════════
+//  المشغّل — خفيف بالريموت
+//  OK: إيقاف/تشغيل وإظهار الشريط · ◀▶: ±10 ث (VOD) · ▲▼: القناة السابقة/التالية (المباشر) · رجوع: خروج
+//  الخط من العقل المدبر لحظة التشغيل · رفض الخط ⇐ خط آخر فوراً · الخروج ⇐ الخط يرجع للمخزن
+// ════════════════════════════════════════════════════════════════════
+class PlayItem {
   final String title;
-  final bool isLive;
-  const PlayerPage({super.key, required this.url, this.fallbackUrl, required this.title, this.isLive = false});
-  @override
-  State<PlayerPage> createState() => _PlayerPageState();
+  final String Function()? url;       // يُبنى بعد إعارة الخط
+  final List<String> direct;          // روابط جاهزة (قناتنا)
+  final bool live;
+  const PlayItem({required this.title, this.url, this.direct = const [], this.live = false});
+}
+
+class PlayerPage extends StatefulWidget {
+  final List<PlayItem> list;
+  final int index;
+  const PlayerPage({super.key, required this.list, this.index = 0});
+
+  static Future<void> open(BuildContext c, List<PlayItem> list, [int i = 0]) =>
+      Navigator.of(c).push(PageRouteBuilder(pageBuilder: (_, __, ___) => PlayerPage(list: list, index: i),
+          transitionDuration: const Duration(milliseconds: 120), transitionsBuilder: (_, a, __, ch) => FadeTransition(opacity: a, child: ch)));
+
+  @override State<PlayerPage> createState() => _PlayerPageState();
 }
 
 class _PlayerPageState extends State<PlayerPage> {
-  VideoPlayerController? _vc;
+  VideoPlayerController? _c;
+  late int _i = widget.index;
+  String _msg = '', _err = '';
+  bool _ui = true, _rotated = false;
+  Timer? _hide;
+  int _di = 0;
   final _focus = FocusNode();
-  bool _ready = false, _overlay = true, _err = false;
-  String _errMsg = '';
-  bool _triedFallback = false;
+
+  PlayItem get _it => widget.list[_i];
 
   @override
   void initState() {
     super.initState();
     WakelockPlus.enable();
-    _init(widget.url);
-  }
-
-  Future<void> _init(String url) async {
-    try {
-      final c = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
-      );
-      _vc = c;
-      await c.initialize();
-      await c.play();
-      c.addListener(_tick);
-      if (mounted) setState(() { _ready = true; _err = false; });
-      _autoHide();
-    } catch (e) {
-      // ★ جرّب الرابط الاحتياطي (ts) للمباشر قبل إظهار الخطأ
-      if (!_triedFallback && widget.fallbackUrl != null && widget.fallbackUrl!.isNotEmpty) {
-        _triedFallback = true;
-        try { _vc?.dispose(); } catch (_) {}
-        _init(widget.fallbackUrl!);
-        return;
-      }
-      if (mounted) setState(() { _err = true; _errMsg = 'تعذّر تشغيل المحتوى — تحقّق من الاتصال أو الاشتراك'; });
-    }
-  }
-
-  void _tick() { if (mounted) setState(() {}); }
-
-  void _autoHide() {
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted && (_vc?.value.isPlaying ?? false)) setState(() => _overlay = false);
-    });
-  }
-
-  void _togglePlay() {
-    final c = _vc; if (c == null) return;
-    Sfx.tap();
-    setState(() { c.value.isPlaying ? c.pause() : c.play(); _overlay = true; });
-    _autoHide();
-  }
-
-  void _seek(int s) {
-    final c = _vc; if (c == null || widget.isLive) return;
-    Sfx.zap();
-    final pos = c.value.position + Duration(seconds: s);
-    final max = c.value.duration;
-    c.seekTo(pos < Duration.zero ? Duration.zero : (pos > max ? max : pos));
-    setState(() => _overlay = true);
-    _autoHide();
-  }
-
-  KeyEventResult _onKey(FocusNode n, KeyEvent e) {
-    if (e is! KeyDownEvent) return KeyEventResult.ignored;
-    final k = e.logicalKey;
-    if (k == LogicalKeyboardKey.arrowLeft) { _seek(-10); return KeyEventResult.handled; }
-    if (k == LogicalKeyboardKey.arrowRight) { _seek(10); return KeyEventResult.handled; }
-    if (k == LogicalKeyboardKey.select || k == LogicalKeyboardKey.enter ||
-        k == LogicalKeyboardKey.space || k == LogicalKeyboardKey.mediaPlayPause) {
-      _togglePlay(); return KeyEventResult.handled;
-    }
-    if (k == LogicalKeyboardKey.arrowUp || k == LogicalKeyboardKey.arrowDown) {
-      setState(() => _overlay = true); _autoHide(); return KeyEventResult.handled;
-    }
-    if (k == LogicalKeyboardKey.goBack || k == LogicalKeyboardKey.escape) {
-      Navigator.pop(context); return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _start();
   }
 
   @override
   void dispose() {
+    _hide?.cancel();
+    _c?.dispose();
     WakelockPlus.disable();
-    _vc?.removeListener(_tick);
-    _vc?.dispose();
+    Brain.release();
     _focus.dispose();
     super.dispose();
   }
 
-  String _fmt(Duration d) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
-    return h > 0 ? '${two(h)}:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
+  Future<void> _start() async {
+    setState(() { _msg = 'جاري التشغيل…'; _err = ''; _ui = true; });
+    _c?.dispose(); _c = null;
+    String url;
+    if (_it.direct.isNotEmpty) {
+      url = _it.direct[_di.clamp(0, _it.direct.length - 1)];
+    } else {
+      if (!await Brain.lease()) { setState(() { _msg = ''; _err = Brain.reasonText; }); return; }
+      Brain.hold();
+      url = _it.url!();
+    }
+    await _open(url);
+  }
+
+  Future<void> _open(String url) async {
+    final c = VideoPlayerController.networkUrl(Uri.parse(url),
+        formatHint: url.contains('.m3u8') ? VideoFormat.hls : null,
+        httpHeaders: const {'User-Agent': 'TOTV-TV/2.0'});
+    _c = c;
+    try {
+      await c.initialize().timeout(const Duration(seconds: 15));
+      if (!mounted || _c != c) return;
+      await c.play();
+      c.addListener(_tick);
+      setState(() => _msg = '');
+      _autoHide();
+    } catch (e) {
+      if (!mounted || _c != c) return;
+      await _fail('$e');
+    }
+  }
+
+  void _tick() {
+    final v = _c?.value;
+    if (v == null) return;
+    if (v.hasError) { _c!.removeListener(_tick); _fail(v.errorDescription ?? 'error'); return; }
+    final b = v.isBuffering && v.isPlaying;
+    if (b && _msg.isEmpty) setState(() => _msg = 'تحميل…');
+    if (!b && _msg == 'تحميل…') setState(() => _msg = '');
+  }
+
+  Future<void> _fail(String why) async {
+    // قناتنا: الرابط الاحتياطي · الخطوط: خط آخر مرة واحدة
+    if (_it.direct.length > _di + 1) { _di++; return _start(); }
+    if (_it.direct.isEmpty && !_rotated && Brain.line > 0) {
+      _rotated = true;
+      setState(() => _msg = 'تبديل الخط…');
+      if (await Brain.lease(bad: Brain.line)) { await _open(_it.url!()); return; }
+    }
+    setState(() { _msg = ''; _err = 'تعذّر تشغيل هذا المحتوى الآن'; });
+  }
+
+  void _autoHide() {
+    _hide?.cancel();
+    _hide = Timer(const Duration(seconds: 4), () { if (mounted && (_c?.value.isPlaying ?? false)) setState(() => _ui = false); });
+  }
+
+  void _zap(int d) {
+    if (widget.list.length < 2) return;
+    _i = (_i + d) % widget.list.length;
+    if (_i < 0) _i += widget.list.length;
+    _di = 0; _rotated = false;
+    _start();
+  }
+
+  KeyEventResult _key(FocusNode _, KeyEvent e) {
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    final k = e.logicalKey;
+    setState(() => _ui = true);
+    _autoHide();
+    final c = _c;
+    if (k == LogicalKeyboardKey.select || k == LogicalKeyboardKey.enter || k == LogicalKeyboardKey.mediaPlayPause || k == LogicalKeyboardKey.space) {
+      if (_err.isNotEmpty) { _di = 0; _rotated = false; _start(); return KeyEventResult.handled; }
+      if (c != null && c.value.isInitialized) { c.value.isPlaying ? c.pause() : c.play(); setState(() {}); }
+      return KeyEventResult.handled;
+    }
+    if (_it.live) {
+      if (k == LogicalKeyboardKey.arrowUp || k == LogicalKeyboardKey.channelUp) { _zap(-1); return KeyEventResult.handled; }
+      if (k == LogicalKeyboardKey.arrowDown || k == LogicalKeyboardKey.channelDown) { _zap(1); return KeyEventResult.handled; }
+    } else if (c != null && c.value.isInitialized) {
+      if (k == LogicalKeyboardKey.arrowRight || k == LogicalKeyboardKey.mediaFastForward) {
+        c.seekTo(c.value.position + const Duration(seconds: 10)); return KeyEventResult.handled;
+      }
+      if (k == LogicalKeyboardKey.arrowLeft || k == LogicalKeyboardKey.mediaRewind) {
+        c.seekTo(c.value.position - const Duration(seconds: 10)); return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  String _t(Duration d) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return d.inHours > 0 ? '${d.inHours}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}' : '${two(d.inMinutes)}:${two(d.inSeconds % 60)}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _vc;
-    final pos = c?.value.position ?? Duration.zero;
-    final dur = c?.value.duration ?? Duration.zero;
-    final prog = dur.inMilliseconds > 0 ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0) : 0.0;
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Focus(
-        focusNode: _focus,
-        autofocus: true,
-        onKeyEvent: _onKey,
-        child: GestureDetector(
-          onTap: _togglePlay,
-          child: Stack(fit: StackFit.expand, children: [
-            if (_ready && c != null)
-              Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c)))
-            else if (_err)
-              Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.error_outline_rounded, color: K.dim, size: 50),
-                const SizedBox(height: 12),
-                Text(_errMsg, style: K.ar(s: 16, c: K.sub)),
-                const SizedBox(height: 18),
-                TvFocus(autofocus: true, onSelect: () => Navigator.pop(context),
-                  builder: (f) => Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: f ? K.gold : K.card, borderRadius: BorderRadius.circular(10)),
-                    child: Text('رجوع', style: K.ar(s: 15, w: FontWeight.w800,
-                        c: f ? Colors.black : K.text)))),
-              ]))
-            else
-              const Center(child: CircularProgressIndicator(color: K.gold)),
-
-            // ★ علامة مائية TOTV+ (هوية التطبيق)
-            if (_ready)
-              Positioned(top: 18, right: 22, child: IgnorePointer(
-                child: Opacity(opacity: _overlay ? 0.9 : 0.45,
-                  child: Text('TOTV+', style: K.en(s: 20, c: K.gold, ls: 2).copyWith(
-                    shadows: [Shadow(color: Colors.black.withOpacity(0.6), blurRadius: 8)]))))),
-
-            // طبقة التحكم
-            if (_overlay && _ready)
-              Positioned(left: 0, right: 0, bottom: 0,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(30, 40, 30, 26),
-                  decoration: BoxDecoration(gradient: LinearGradient(
-                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Colors.black.withOpacity(0.85)])),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(widget.title, style: K.ar(s: 20, w: FontWeight.w800)),
-                    const SizedBox(height: 14),
-                    if (!widget.isLive) Row(children: [
-                      Text(_fmt(pos), style: K.ar(s: 13, c: K.sub)),
-                      const SizedBox(width: 12),
-                      Expanded(child: LayoutBuilder(builder: (_, cons) {
-                        final fw = cons.maxWidth * prog;
-                        return SizedBox(height: 16, child: Stack(alignment: Alignment.centerLeft, children: [
-                          Container(height: 6, decoration: BoxDecoration(
-                            color: Colors.white24, borderRadius: BorderRadius.circular(4))),
-                          Container(height: 6, width: fw, decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFFFFD479), K.gold]),
-                            borderRadius: BorderRadius.circular(4),
-                            boxShadow: [BoxShadow(color: K.gold.withOpacity(0.6), blurRadius: 8)])),
-                          Positioned(left: (fw - 7).clamp(0.0, cons.maxWidth - 14),
-                            child: Container(width: 14, height: 14, decoration: BoxDecoration(
-                              color: K.gold, shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: [BoxShadow(color: K.gold.withOpacity(0.8), blurRadius: 10)]))),
-                        ]));
-                      })),
-                      const SizedBox(width: 12),
-                      Text(_fmt(dur), style: K.ar(s: 13, c: K.sub)),
-                    ]),
-                    if (widget.isLive)
-                      Row(children: [
-                        Container(width: 8, height: 8, decoration: const BoxDecoration(
-                          color: Color(0xFFE53935), shape: BoxShape.circle)),
-                        const SizedBox(width: 7),
-                        Text('بث مباشر', style: K.ar(s: 13, w: FontWeight.w700, c: const Color(0xFFE53935))),
-                      ]),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      Icon(c!.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                          color: K.gold, size: 26),
+    final c = _c;
+    final ready = c != null && c.value.isInitialized;
+    return Focus(
+      focusNode: _focus, autofocus: true, onKeyEvent: _key,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(fit: StackFit.expand, children: [
+          if (ready) Center(child: AspectRatio(aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio, child: VideoPlayer(c))),
+          if (_msg.isNotEmpty) Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Loading(), const SizedBox(height: 12), Text(_msg, style: K.s(14, c: K.t2)),
+          ])),
+          if (_err.isNotEmpty) Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.error_outline_rounded, color: K.red, size: 40),
+            const SizedBox(height: 10),
+            Text(_err, textAlign: TextAlign.center, style: K.s(15)),
+            const SizedBox(height: 6),
+            Text('OK لإعادة المحاولة · رجوع للخروج', style: K.s(12, c: K.t3)),
+          ])),
+          AnimatedOpacity(
+            opacity: _ui ? 1 : 0, duration: const Duration(milliseconds: 200),
+            child: Align(alignment: Alignment.bottomCenter, child: Container(
+              padding: const EdgeInsets.fromLTRB(40, 40, 40, 26),
+              decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Color(0xDD000000)])),
+              child: Directionality(textDirection: TextDirection.rtl, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  if (_it.live) Container(margin: const EdgeInsets.only(left: 10), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(color: K.red, borderRadius: BorderRadius.circular(5)),
+                      child: Text('مباشر', style: K.s(11.5, w: FontWeight.w800))),
+                  Expanded(child: Text(_it.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(18, w: FontWeight.w800))),
+                  if (_it.live && widget.list.length > 1) Text('▲▼ تبديل القناة', style: K.s(12, c: K.t3)),
+                ]),
+                if (ready && !_it.live) ...[
+                  const SizedBox(height: 10),
+                  ValueListenableBuilder<VideoPlayerValue>(valueListenable: c, builder: (_, v, __) {
+                    final tot = v.duration.inMilliseconds;
+                    return Row(textDirection: TextDirection.ltr, children: [
+                      Text(_t(v.position), style: K.s(12, c: K.t2)),
                       const SizedBox(width: 10),
-                      Text('OK: تشغيل/إيقاف   ◀ ▶: تقديم/إرجاع   رجوع: خروج',
-                          style: K.ar(s: 12, c: K.dim)),
-                    ]),
-                  ]),
-                )),
-          ]),
-        ),
+                      Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(
+                          value: tot <= 0 ? 0 : (v.position.inMilliseconds / tot).clamp(0.0, 1.0), minHeight: 4,
+                          color: K.gold, backgroundColor: Colors.white24))),
+                      const SizedBox(width: 10),
+                      Text(_t(v.duration), style: K.s(12, c: K.t2)),
+                    ]);
+                  }),
+                ],
+              ])),
+            )),
+          ),
+        ]),
       ),
     );
   }

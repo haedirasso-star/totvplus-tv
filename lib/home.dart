@@ -1,533 +1,482 @@
-import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'api.dart';
-import 'ui.dart';
-import 'player.dart';
-import 'series_detail.dart';
-import 'login.dart';
+import 'dart:async';
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-  @override
-  State<HomePage> createState() => _HomePageState();
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'core.dart';
+import 'pair.dart';
+import 'player.dart';
+import 'ui.dart';
+
+// ════════════════════════════════════════════════════════════════════
+//  الواجهة: شريط جانبي (الرئيسية · TOTV Live · القنوات · أفلام · مسلسلات · بحث · المزيد)
+//  الرئيسية تبدأ بقناتنا TOTV Live ثم الأحدث — كل شيء بالريموت
+// ════════════════════════════════════════════════════════════════════
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key});
+  @override State<HomeShell> createState() => _HomeShellState();
 }
 
-enum Section { home, movies, series, live, search, account }
-
-class _HomePageState extends State<HomePage> {
-  Section _sec = Section.home;
-  bool _loading = true;
-  String _backdrop = '';
+class _HomeShellState extends State<HomeShell> {
+  int _tab = 0;
+  final _tabs = const [
+    (Icons.home_rounded, 'الرئيسية'), (Icons.live_tv_rounded, 'TOTV Live'), (Icons.tv_rounded, 'القنوات'),
+    (Icons.movie_rounded, 'أفلام'), (Icons.video_library_rounded, 'مسلسلات'), (Icons.search_rounded, 'بحث'),
+    (Icons.more_horiz_rounded, 'المزيد'),
+  ];
+  DateTime _back = DateTime(2000);
 
   @override
   void initState() {
     super.initState();
-    _load();
+    Catalog.rev.addListener(_r); Sub.rev.addListener(_r);
+    Catalog.load();
+    if (!Sub.loaded) Sub.load();
   }
+  @override
+  void dispose() { Catalog.rev.removeListener(_r); Sub.rev.removeListener(_r); super.dispose(); }
+  void _r() { if (mounted) setState(() {}); }
 
-  Future<void> _load() async {
-    if (!Api.loaded) await Api.loadAll();
-    _pickBackdrop();
-    if (mounted) setState(() => _loading = false);
-  }
-
-  void _pickBackdrop() {
-    for (final m in Api.movies) {
-      final l = sLogo(m);
-      if (l.isNotEmpty) { _backdrop = l; break; }
-    }
-  }
-
-  // تجميع العناصر حسب الفئة
-  Map<String, List<dynamic>> _group(List<dynamic> items, List<dynamic> cats) {
-    final catName = <String, String>{
-      for (final c in cats) (c['category_id']?.toString() ?? ''): (c['category_name'] ?? c['name'] ?? '').toString()
-    };
-    final out = <String, List<dynamic>>{};
-    for (final it in items) {
-      final name = catName[sCat(it)] ?? 'أخرى';
-      (out[name] ??= []).add(it);
-    }
-    return out;
-  }
+  Widget _page() => switch (_tab) {
+        0 => const HomePage(),
+        1 => const TotvLivePage(),
+        2 => const ChannelsPage(),
+        3 => const VodPage(series: false),
+        4 => const VodPage(series: true),
+        5 => const SearchPage(),
+        _ => const MorePage(),
+      };
 
   @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: K.gold)),
-      );
-    }
-    return Scaffold(
-      body: Row(children: [
-        _sidebar(),
-        Expanded(child: _content()),
-      ]),
-    );
-  }
-
-  // ── الشريط الجانبي ──────────────────────────────────────────
-  Widget _sidebar() {
-    Widget item(Section s, IconData ic, String label) {
-      final on = _sec == s;
-      return TvFocus(
-        scale: 1.0,
-        onSelect: () => setState(() => _sec = s),
-        builder: (f) => Container(
-          width: 168,
-          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          decoration: BoxDecoration(
-            color: f ? K.gold.withOpacity(0.16) : (on ? Colors.white10 : Colors.transparent),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: f ? K.gold : Colors.transparent, width: 2),
-          ),
-          child: Row(children: [
-            Icon(ic, color: f || on ? K.gold : K.sub, size: 22),
-            const SizedBox(width: 12),
-            Text(label, style: K.ar(s: 15, w: f || on ? FontWeight.w800 : FontWeight.w500,
-                c: f || on ? K.gold : K.sub)),
-          ]),
-        ),
-      );
-    }
-
-    return Container(
-      width: 190,
-      color: K.bg2,
-      child: SafeArea(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
-            child: Text('TOTV+', style: K.en(s: 24, c: K.gold, ls: 2))),
-          item(Section.home, Icons.home_rounded, 'الرئيسية'),
-          item(Section.movies, Icons.movie_rounded, 'أفلام'),
-          item(Section.series, Icons.live_tv_rounded, 'مسلسلات'),
-          item(Section.live, Icons.podcasts_rounded, 'البث المباشر'),
-          item(Section.search, Icons.search_rounded, 'بحث'),
-          item(Section.account, Icons.person_rounded, 'حسابي'),
-          const Spacer(),
-          TvFocus(
-            scale: 1.0,
-            onSelect: () async {
-              await Session.logout();
-              if (mounted) {
-                Navigator.pushReplacement(context,
-                    MaterialPageRoute(builder: (_) => const LoginPage()));
-              }
-            },
-            builder: (f) => Container(
-              width: 168,
-              margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-              decoration: BoxDecoration(
-                color: f ? const Color(0xFFE53935).withOpacity(0.16) : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: f ? const Color(0xFFE53935) : Colors.transparent, width: 2),
-              ),
-              child: Row(children: [
-                Icon(Icons.logout_rounded, color: f ? const Color(0xFFE53935) : K.sub, size: 22),
-                const SizedBox(width: 12),
-                Text('خروج', style: K.ar(s: 15, w: f ? FontWeight.w800 : FontWeight.w500,
-                    c: f ? const Color(0xFFE53935) : K.sub)),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 10),
-        ]),
-      ),
-    );
-  }
-
-  // ── المحتوى حسب القسم ───────────────────────────────────────
-  Widget _content() {
-    switch (_sec) {
-      case Section.movies:
-        return CategoryBrowse(items: Api.movies, cats: Api.movieCats, type: 'movie', onOpen: _open);
-      case Section.series:
-        return CategoryBrowse(items: Api.series, cats: Api.seriesCats, type: 'series', onOpen: _open);
-      case Section.live:
-        return CategoryBrowse(items: Api.live, cats: Api.liveCats, type: 'live', onOpen: _open);
-      case Section.search:
-        return SearchView(onPlay: _open);
-      case Section.account:
-        return AccountView(backdrop: _backdrop);
-      case Section.home:
-        return _homeView();
-    }
-  }
-
-  Widget _homeView() {
-    // الرئيسية: مزيج — أحدث الأفلام + المسلسلات + المباشر
-    final rails = <String, List<dynamic>>{
-      '🎬 أفلام مختارة': Api.movies.take(20).toList(),
-      '📺 مسلسلات': Api.series.take(20).toList(),
-      '🔴 قنوات مباشرة': Api.live.take(20).toList(),
-    };
-    return Stack(children: [
-      // خلفية بوستر فخمة
-      if (_backdrop.isNotEmpty)
-        Positioned.fill(child: Opacity(opacity: 0.18,
-          child: CachedNetworkImage(imageUrl: _backdrop, fit: BoxFit.cover,
-              errorWidget: (_, __, ___) => const SizedBox()))),
-      Positioned.fill(child: Container(decoration: BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.centerLeft, end: Alignment.centerRight,
-          colors: [K.bg, K.bg.withOpacity(0.6)])))),
-      _railsList(rails, mixedType: true),
-    ]);
-  }
-
-  Widget _rails(Map<String, List<dynamic>> groups, String type) {
-    if (groups.isEmpty) {
-      return Center(child: Text('لا يوجد محتوى', style: K.ar(s: 16, c: K.sub)));
-    }
-    return _railsList(groups, forcedType: type);
-  }
-
-  Widget _railsList(Map<String, List<dynamic>> groups, {String? forcedType, bool mixedType = false}) {
-    final entries = groups.entries.toList();
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(24, 22, 24, 30),
-      itemCount: entries.length,
-      itemBuilder: (_, ri) {
-        final e = entries[ri];
-        final type = forcedType ?? _guessType(e.key);
-        final isLive = type == 'live';
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(padding: const EdgeInsets.only(bottom: 10, top: 6),
-            child: Text(e.key, style: K.ar(s: 18, w: FontWeight.w800))),
-          SizedBox(
-            height: isLive ? 150 : 250,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: e.value.length,
-              itemBuilder: (_, i) {
-                final it = e.value[i];
-                final auto = ri == 0 && i == 0;
-                if (isLive) {
-                  return LiveCard(title: sName(it), logo: sLogo(it), autofocus: auto,
-                      onSelect: () => _open(it, 'live'));
-                }
-                final t = mixedType ? _typeOf(it) : type;
-                return PosterCard(title: sName(it), logo: sLogo(it), autofocus: auto,
-                    onSelect: () => _open(it, t));
-              },
-            ),
-          ),
-          const SizedBox(height: 12),
-        ]);
-      },
-    );
-  }
-
-  String _guessType(String railKey) {
-    if (railKey.contains('مباشر') || railKey.contains('🔴')) return 'live';
-    if (railKey.contains('مسلسل') || railKey.contains('📺')) return 'series';
-    return 'movie';
-  }
-
-  String _typeOf(dynamic it) {
-    if (it is Map && it['series_id'] != null) return 'series';
-    if (it is Map && (it['stream_type'] == 'live')) return 'live';
-    return 'movie';
-  }
-
-  void _open(dynamic item, String type) {
-    if (type == 'series') {
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => SeriesDetailPage(item: item)));
-    } else if (type == 'live') {
-      // ★ المباشر عبر HLS (m3u8) — متوافق مع ExoPlayer، مع احتياطي ts
-      final id = sId(item);
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => PlayerPage(
-            url: Api.streamUrl('live', id, 'm3u8'),
-            fallbackUrl: Api.streamUrl('live', id, 'ts'),
-            title: sName(item), isLive: true)));
-    } else {
-      final url = Api.streamUrl('movie', sId(item), sExt(item));
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => PlayerPage(url: url, title: sName(item), isLive: false)));
-    }
-  }
-}
-
-/// ── البحث ─────────────────────────────────────────────────────
-class SearchView extends StatefulWidget {
-  final void Function(dynamic, String) onPlay;
-  const SearchView({super.key, required this.onPlay});
-  @override
-  State<SearchView> createState() => _SearchViewState();
-}
-
-class _SearchViewState extends State<SearchView> {
-  final _c = TextEditingController();
-  List<MapEntry<dynamic, String>> _res = [];
-
-  void _search(String raw) {
-    final q = raw.trim().toLowerCase();
-    if (q.length < 2) { setState(() => _res = []); return; }
-    final out = <MapEntry<dynamic, String>>[];
-    for (final m in Api.movies) {
-      if (sName(m).toLowerCase().contains(q)) { out.add(MapEntry(m, 'movie')); if (out.length >= 80) break; }
-    }
-    for (final s in Api.series) {
-      if (sName(s).toLowerCase().contains(q)) { out.add(MapEntry(s, 'series')); if (out.length >= 130) break; }
-    }
-    for (final l in Api.live) {
-      if (sName(l).toLowerCase().contains(q)) { out.add(MapEntry(l, 'live')); if (out.length >= 160) break; }
-    }
-    setState(() => _res = out);
-  }
-
-  @override
-  void dispose() { _c.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final res = _res;
-    final q = _c.text.trim();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 22, 24, 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (did, _) {
+      if (did) return;
+      if (_tab != 0) { setState(() => _tab = 0); return; }
+      if (DateTime.now().difference(_back).inSeconds < 2) { SystemNavigator.pop(); return; }
+      _back = DateTime.now();
+      toast(context, 'اضغط رجوع مرة أخرى للخروج');
+    },
+    child: Scaffold(
+      backgroundColor: K.bg,
+      body: Directionality(textDirection: TextDirection.rtl, child: Row(children: [
+        // ── الشريط الجانبي ──
         Container(
-          decoration: BoxDecoration(color: K.card, borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: K.gold.withOpacity(0.4))),
-          child: TextField(
-            controller: _c,
-            autofocus: true,
-            style: K.ar(s: 16),
-            onChanged: _search,
-            decoration: InputDecoration(
-              hintText: 'ابحث عن فيلم أو مسلسل أو قناة…',
-              hintStyle: K.ar(s: 14, c: K.dim),
-              prefixIcon: const Icon(Icons.search_rounded, color: K.gold),
-              border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          width: 168, color: K.panel,
+          padding: const EdgeInsets.fromLTRB(10, 22, 10, 16),
+          child: FocusTraversalGroup(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Padding(padding: const EdgeInsets.fromLTRB(8, 0, 8, 18), child: Text('TOTV+', style: K.s(22, w: FontWeight.w900, c: K.gold))),
+            for (var i = 0; i < _tabs.length; i++) Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: TvFocus(
+                autofocus: i == 0, scale: 1.02, radius: 9,
+                onFocus: (f) { if (f && _tab != i) setState(() => _tab = i); },
+                onTap: () => setState(() => _tab = i),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  color: _tab == i ? K.gold.withValues(alpha: .12) : Colors.transparent,
+                  child: Row(children: [
+                    Icon(_tabs[i].$1, size: 19, color: _tab == i ? K.gold : (i == 1 ? K.red : K.t2)),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(_tabs[i].$2, style: K.s(13.5, w: _tab == i ? FontWeight.w800 : FontWeight.w600, c: _tab == i ? K.t1 : K.t2))),
+                  ]),
+                ),
+              ),
             ),
-          ),
+            const Spacer(),
+            if (Sub.loaded) Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(Sub.active ? 'مشترك حتى ${Sub.expiry!.year}/${Sub.expiry!.month}/${Sub.expiry!.day}' : 'لا يوجد اشتراك فعّال',
+                    style: K.s(10.5, c: Sub.active ? K.t3 : K.red))),
+          ])),
         ),
-        const SizedBox(height: 16),
-        Expanded(child: res.isEmpty
-          ? Center(child: Text(q.length < 2 ? 'اكتب حرفين على الأقل للبحث' : 'لا نتائج', style: K.ar(s: 15, c: K.sub)))
-          : GridView.builder(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 170, childAspectRatio: 0.62,
-                crossAxisSpacing: 4, mainAxisSpacing: 14),
-              itemCount: res.length,
-              itemBuilder: (_, i) {
-                final e = res[i];
-                return PosterCard(title: sName(e.key), logo: sLogo(e.key), autofocus: i == 0,
-                    onSelect: () => widget.onPlay(e.key, e.value));
-              },
-            )),
-      ]),
-    );
-  }
+        // ── المحتوى ──
+        Expanded(child: FocusTraversalGroup(child: KeyedSubtree(key: ValueKey(_tab), child: _page()))),
+      ])),
+    ),
+  );
 }
 
-/// ── حسابي ─────────────────────────────────────────────────────
-class AccountView extends StatelessWidget {
-  final String backdrop;
-  const AccountView({super.key, required this.backdrop});
-
+// ── الرئيسية ──────────────────────────────────────────────────────
+class HomePage extends StatelessWidget {
+  const HomePage({super.key});
   @override
   Widget build(BuildContext context) {
-    return Stack(children: [
-      if (backdrop.isNotEmpty)
-        Positioned.fill(child: Opacity(opacity: 0.14,
-          child: CachedNetworkImage(imageUrl: backdrop, fit: BoxFit.cover,
-              errorWidget: (_, __, ___) => const SizedBox()))),
-      Positioned.fill(child: Container(color: K.bg.withOpacity(0.7))),
-      Center(child: SingleChildScrollView(
-        child: Container(
-          width: 560,
-          padding: const EdgeInsets.all(34),
-          decoration: BoxDecoration(
-            color: K.bg2.withOpacity(0.85),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: K.gold.withOpacity(0.25)),
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            // شارة بريميوم
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFFFFD479), K.gold]),
-                borderRadius: BorderRadius.circular(30),
-                boxShadow: [BoxShadow(color: K.gold.withOpacity(0.4), blurRadius: 20)]),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.workspace_premium_rounded, color: Colors.black, size: 22),
-                const SizedBox(width: 9),
-                Text('PREMIUM', style: K.en(s: 18, c: Colors.black, ls: 3)),
-              ]),
-            ),
-            const SizedBox(height: 12),
-            Text('مرحباً ${Session.user}', style: K.ar(s: 18, w: FontWeight.w800)),
-            const SizedBox(height: 4),
-            Text('اشتراكك فعّال — استمتع بكل المحتوى', style: K.ar(s: 13, c: K.sub)),
-            const SizedBox(height: 28),
-
-            // زر تلجرام
-            _ContactBtn(
-              icon: Icons.telegram_rounded, label: 'قناة تلجرام', sub: 'آخر الأخبار والتحديثات',
-              color: const Color(0xFF2AABEE), autofocus: true,
-              onTap: () => openUrl(kTelegram)),
-            const SizedBox(height: 12),
-            // زر واتساب
-            _ContactBtn(
-              icon: Icons.support_agent_rounded, label: 'واتساب الدعم / شراء اشتراك',
-              sub: kWhatsAppDisplay, color: const Color(0xFF25D366),
-              onTap: () => openUrl('https://wa.me/$kWhatsApp?text=${Uri.encodeComponent("مرحباً، أريد الاستفسار عن اشتراك TOTV+")}')),
-            const SizedBox(height: 12),
-            // تسجيل خروج
-            _ContactBtn(
-              icon: Icons.logout_rounded, label: 'تسجيل الخروج', sub: 'الخروج من الحساب',
-              color: const Color(0xFFE53935),
-              onTap: () async {
-                await Session.logout();
-                if (context.mounted) {
-                  Navigator.pushAndRemoveUntil(context,
-                      MaterialPageRoute(builder: (_) => const LoginPage()), (_) => false);
-                }
-              }),
-          ]),
-        ),
-      )),
+    final mv = Catalog.homeMovies(), sr = Catalog.homeSeries();
+    final ch = Catalog.live.take(20).toList();
+    return ListView(padding: const EdgeInsets.fromLTRB(28, 22, 28, 30), children: [
+      const _LiveHero(),
+      if (mv.isEmpty && sr.isEmpty) const Padding(padding: EdgeInsets.all(40), child: Loading()),
+      Rail(title: 'أحدث الأفلام', height: PosterCard.h + 32, items: [
+        for (final m in mv.take(30)) PosterCard(m: m, img: Catalog.img(m), onTap: () => openMovie(context, m)),
+      ]),
+      Rail(title: 'أحدث المسلسلات', height: PosterCard.h + 32, items: [
+        for (final s in sr.take(30)) PosterCard(m: s, img: Catalog.img(s), onTap: () => openSeries(context, s)),
+      ]),
+      Rail(title: 'قنوات مباشرة', height: ChannelCard.h + 30, items: [
+        for (var i = 0; i < ch.length; i++) ChannelCard(m: ch[i], img: Catalog.img(ch[i]), onTap: () => playChannels(context, ch, i)),
+      ]),
     ]);
   }
 }
 
-class _ContactBtn extends StatelessWidget {
-  final IconData icon; final String label, sub; final Color color;
-  final VoidCallback onTap; final bool autofocus;
-  const _ContactBtn({required this.icon, required this.label, required this.sub,
-      required this.color, required this.onTap, this.autofocus = false});
+/// بطاقة قناتنا في أعلى الرئيسية
+class _LiveHero extends StatelessWidget {
+  const _LiveHero();
   @override
   Widget build(BuildContext context) => TvFocus(
-    autofocus: autofocus, scale: 1.03, onSelect: onTap,
-    builder: (f) => Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-      decoration: BoxDecoration(
-        color: f ? color.withOpacity(0.18) : K.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: f ? color : Colors.white10, width: 2),
-        boxShadow: f ? [BoxShadow(color: color.withOpacity(0.35), blurRadius: 18)] : null),
+    autofocus: false, scale: 1.015, radius: 16,
+    onTap: () => playTotvLive(context),
+    child: Container(
+      height: 168,
+      decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF3A0D10), Color(0xFF15151C)],
+          begin: Alignment.centerRight, end: Alignment.centerLeft)),
+      padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Row(children: [
-        Container(width: 44, height: 44,
-          decoration: BoxDecoration(color: color.withOpacity(0.18), shape: BoxShape.circle),
-          child: Icon(icon, color: color, size: 24)),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: K.ar(s: 15, w: FontWeight.w800, c: f ? color : K.text)),
-          Text(sub, style: K.ar(s: 12, c: K.sub)),
+        Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              decoration: BoxDecoration(color: K.red, borderRadius: BorderRadius.circular(6)),
+              child: Text('● مباشر', style: K.s(11.5, w: FontWeight.w800))),
+          const SizedBox(height: 10),
+          Text('TOTV Live', style: K.s(28, w: FontWeight.w900)),
+          Text('قناتنا الحصرية — المباريات والبرامج بجودة عالية', style: K.s(13.5, c: K.t2)),
         ])),
-        Icon(Icons.arrow_forward_ios_rounded, color: f ? color : K.dim, size: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(color: K.gold, borderRadius: BorderRadius.circular(10)),
+          child: Row(children: [
+            const Icon(Icons.play_arrow_rounded, color: Colors.black),
+            const SizedBox(width: 4),
+            Text('شاهد الآن', style: K.s(14, w: FontWeight.w900, c: Colors.black)),
+          ]),
+        ),
       ]),
     ),
   );
 }
 
-/// ── تصفّح حسب الفئة (يعرض كل الأقسام وكل المحتوى في شبكة) ──────
-class CategoryBrowse extends StatefulWidget {
-  final List<dynamic> items;
-  final List<dynamic> cats;
-  final String type; // movie | series | live
-  final void Function(dynamic, String) onOpen;
-  const CategoryBrowse({super.key, required this.items, required this.cats,
-      required this.type, required this.onOpen});
+// ── قناتنا ─────────────────────────────────────────────────────────
+class TotvLivePage extends StatelessWidget {
+  const TotvLivePage({super.key});
   @override
-  State<CategoryBrowse> createState() => _CategoryBrowseState();
+  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.fromLTRB(28, 22, 28, 30), children: [
+    const _LiveHero(),
+    const SizedBox(height: 18),
+    Text('تبث TOTV Live المباريات الكبرى والبرامج الرياضية مباشرة. إن لم يكن هناك بث الآن ستظهر رسالة بموعد البث القادم.',
+        style: K.s(13.5, c: K.t2, h: 1.6)),
+  ]);
 }
 
-class _CategoryBrowseState extends State<CategoryBrowse> {
-  String _catId = 'all';
+Future<void> playTotvLive(BuildContext c) async {
+  try {
+    final (urls, xt) = await TotvLive.urls();
+    if (!c.mounted) return;
+    PlayerPage.open(c, [PlayItem(title: 'TOTV Live', live: true, direct: urls,
+        url: xt.isEmpty ? null : () => Brain.live(xt))]);
+  } catch (e) { if (c.mounted) toast(c, '$e', err: true); }
+}
 
-  // فئات مرتّبة + عدد عناصر كل فئة
-  List<MapEntry<String, String>> get _cats {
-    final counts = <String, int>{};
-    for (final it in widget.items) {
-      final c = sCat(it);
-      counts[c] = (counts[c] ?? 0) + 1;
-    }
-    final list = <MapEntry<String, String>>[MapEntry('all', 'الكل')];
-    for (final c in widget.cats) {
-      final id = (c['category_id'] ?? '').toString();
-      final name = (c['category_name'] ?? c['name'] ?? '').toString();
-      if (id.isEmpty || name.isEmpty) continue;
-      if ((counts[id] ?? 0) == 0) continue; // أخفِ الفئات الفارغة
-      list.add(MapEntry(id, name));
-    }
-    return list;
+void playChannels(BuildContext c, List<Map<String, dynamic>> list, int i) {
+  PlayerPage.open(c, [for (final m in list) PlayItem(title: '${m['name'] ?? ''}', live: true, url: () => Brain.live(m['stream_id']))], i);
+}
+
+void openMovie(BuildContext c, Map<String, dynamic> m) => Navigator.of(c).push(MaterialPageRoute(builder: (_) => MovieDetail(m: m)));
+void openSeries(BuildContext c, Map<String, dynamic> s) => Navigator.of(c).push(MaterialPageRoute(builder: (_) => SeriesDetail(s: s)));
+
+// ── القنوات: الأقسام يميناً والقنوات شبكة ─────────────────────────
+class ChannelsPage extends StatefulWidget {
+  const ChannelsPage({super.key});
+  @override State<ChannelsPage> createState() => _ChannelsPageState();
+}
+
+class _ChannelsPageState extends State<ChannelsPage> {
+  String _cat = '';
+  @override
+  Widget build(BuildContext context) {
+    final cats = Catalog.cats['live'] ?? const [];
+    final list = _cat.isEmpty ? Catalog.live : Catalog.live.where((x) => '${x['category_id']}' == _cat).toList();
+    if (Catalog.live.isEmpty) return const Loading();
+    return Row(children: [
+      SizedBox(width: 190, child: ListView(padding: const EdgeInsets.fromLTRB(8, 22, 8, 20), children: [
+        _catTile('', 'كل القنوات'),
+        for (final c in cats) _catTile('${c['category_id']}', '${c['category_name'] ?? ''}'),
+      ])),
+      Expanded(child: GridView.builder(
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: ChannelCard.w + 12, mainAxisExtent: ChannelCard.h + 34,
+            crossAxisSpacing: 12, mainAxisSpacing: 8),
+        itemCount: list.length,
+        itemBuilder: (_, i) => ChannelCard(m: list[i], img: Catalog.img(list[i]), onTap: () => playChannels(context, list, i)),
+      )),
+    ]);
   }
 
-  List<dynamic> get _shown {
-    if (_catId == 'all') return widget.items;
-    return widget.items.where((it) => sCat(it) == _catId).toList();
+  Widget _catTile(String id, String name) => Padding(
+    padding: const EdgeInsets.only(bottom: 3),
+    child: TvFocus(scale: 1.0, radius: 8, onFocus: (f) { if (f) setState(() => _cat = id); }, onTap: () => setState(() => _cat = id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        color: _cat == id ? K.gold.withValues(alpha: .1) : Colors.transparent,
+        child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(12.5, c: _cat == id ? K.gold : K.t2)),
+      )),
+  );
+}
+
+// ── أفلام / مسلسلات ────────────────────────────────────────────────
+class VodPage extends StatefulWidget {
+  final bool series;
+  const VodPage({super.key, required this.series});
+  @override State<VodPage> createState() => _VodPageState();
+}
+
+class _VodPageState extends State<VodPage> {
+  String _cat = '';
+  int _limit = 60;
+  @override
+  Widget build(BuildContext context) {
+    final all = widget.series ? Catalog.series : Catalog.movies;
+    final cats = Catalog.cats[widget.series ? 'series' : 'movie'] ?? const [];
+    if (all.isEmpty) return const Loading();
+    final list = _cat.isEmpty ? all : all.where((x) => '${x['category_id']}' == _cat).toList();
+    return Row(children: [
+      SizedBox(width: 190, child: ListView(padding: const EdgeInsets.fromLTRB(8, 22, 8, 20), children: [
+        _catTile('', widget.series ? 'كل المسلسلات' : 'كل الأفلام'),
+        for (final c in cats) _catTile('${c['category_id']}', '${c['category_name'] ?? ''}'),
+      ])),
+      Expanded(child: GridView.builder(
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: PosterCard.w + 14, mainAxisExtent: PosterCard.h + 34,
+            crossAxisSpacing: 14, mainAxisSpacing: 8),
+        itemCount: list.length.clamp(0, _limit),
+        itemBuilder: (_, i) {
+          if (i == _limit - 8 && _limit < list.length) WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) setState(() => _limit += 60); });
+          final m = list[i];
+          return PosterCard(m: m, img: Catalog.img(m), onTap: () => widget.series ? openSeries(context, m) : openMovie(context, m));
+        },
+      )),
+    ]);
+  }
+
+  Widget _catTile(String id, String name) => Padding(
+    padding: const EdgeInsets.only(bottom: 3),
+    child: TvFocus(scale: 1.0, radius: 8, onFocus: (f) { if (f && _cat != id) setState(() { _cat = id; _limit = 60; }); },
+      onTap: () => setState(() { _cat = id; _limit = 60; }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        color: _cat == id ? K.gold.withValues(alpha: .1) : Colors.transparent,
+        child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(12.5, c: _cat == id ? K.gold : K.t2)),
+      )),
+  );
+}
+
+// ── تفاصيل فيلم ───────────────────────────────────────────────────
+class MovieDetail extends StatelessWidget {
+  final Map<String, dynamic> m;
+  const MovieDetail({super.key, required this.m});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: K.bg,
+    body: Directionality(textDirection: TextDirection.rtl, child: Padding(
+      padding: const EdgeInsets.fromLTRB(56, 40, 56, 40),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        ClipRRect(borderRadius: BorderRadius.circular(14), child: NetImg(Catalog.img(m), w: 200, h: 296, fallback: '${m['name'] ?? ''}')),
+        const SizedBox(width: 32),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${m['name'] ?? ''}', style: K.s(26, w: FontWeight.w900)),
+          const SizedBox(height: 8),
+          if ('${m['rating'] ?? ''}'.isNotEmpty && '${m['rating']}' != '0')
+            Row(children: [const Icon(Icons.star_rounded, color: K.gold, size: 18), const SizedBox(width: 4), Text('${m['rating']}', style: K.s(14, c: K.t2))]),
+          const SizedBox(height: 24),
+          TvFocus(autofocus: true, radius: 10, onTap: () => PlayerPage.open(context, [
+            PlayItem(title: '${m['name'] ?? ''}', url: () => Brain.movie(m['stream_id'], '${m['container_extension'] ?? ''}')),
+          ]), child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 12), color: K.gold,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.play_arrow_rounded, color: Colors.black), const SizedBox(width: 6),
+              Text('تشغيل', style: K.s(16, w: FontWeight.w900, c: Colors.black)),
+            ]))),
+        ])),
+      ]),
+    )),
+  );
+}
+
+// ── تفاصيل مسلسل: المواسم ثم الحلقات ────────────────────────────────
+class SeriesDetail extends StatefulWidget {
+  final Map<String, dynamic> s;
+  const SeriesDetail({super.key, required this.s});
+  @override State<SeriesDetail> createState() => _SeriesDetailState();
+}
+
+class _SeriesDetailState extends State<SeriesDetail> {
+  Map<String, dynamic>? _d;
+  bool _loading = true;
+  String _season = '';
+
+  @override
+  void initState() {
+    super.initState();
+    Catalog.episodes(int.tryParse('${widget.s['series_id']}') ?? 0).then((d) {
+      if (!mounted) return;
+      setState(() {
+        _d = d; _loading = false;
+        final eps = d?['episodes'];
+        if (eps is Map && eps.isNotEmpty) _season = '${(eps.keys.toList()..sort((a, b) => (int.tryParse('$a') ?? 0).compareTo(int.tryParse('$b') ?? 0))).first}';
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final cats = _cats;
-    final shown = _shown;
-    final isLive = widget.type == 'live';
-    return Row(children: [
-      // قائمة الفئات (يسار) — قابلة للتنقّل بالريموت
-      Container(
-        width: 230,
-        color: K.bg2.withOpacity(0.5),
-        child: ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-          itemCount: cats.length,
-          itemBuilder: (_, i) {
-            final e = cats[i];
-            final on = e.key == _catId;
-            return TvFocus(
-              scale: 1.0,
-              autofocus: i == 0,
-              onSelect: () => setState(() => _catId = e.key),
-              builder: (f) => Container(
-                margin: const EdgeInsets.symmetric(vertical: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: f ? K.gold.withOpacity(0.16) : (on ? Colors.white10 : Colors.transparent),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: f ? K.gold : Colors.transparent, width: 2),
-                ),
-                child: Text(e.value,
-                    maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: K.ar(s: 14, w: f || on ? FontWeight.w800 : FontWeight.w500,
-                        c: f || on ? K.gold : K.sub)),
-              ),
-            );
-          },
-        ),
-      ),
-      // الشبكة (يمين) — كل المحتوى
-      Expanded(child: shown.isEmpty
-        ? Center(child: Text('لا يوجد محتوى', style: K.ar(s: 16, c: K.sub)))
-        : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Padding(padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
-              child: Text('${cats.firstWhere((e) => e.key == _catId, orElse: () => const MapEntry('all','الكل')).value}  •  ${shown.length}',
-                  style: K.ar(s: 15, w: FontWeight.w700, c: K.sub))),
-            Expanded(child: GridView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 20),
-              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: isLive ? 175 : 165,
-                childAspectRatio: isLive ? 1.05 : 0.60,
-                crossAxisSpacing: 6, mainAxisSpacing: 14),
-              itemCount: shown.length,
-              itemBuilder: (_, i) {
-                final it = shown[i];
-                if (isLive) {
-                  return LiveCard(title: sName(it), logo: sLogo(it), autofocus: i == 0,
-                      onSelect: () => widget.onOpen(it, 'live'));
-                }
-                return PosterCard(title: sName(it), logo: sLogo(it), autofocus: i == 0,
-                    onSelect: () => widget.onOpen(it, widget.type));
-              },
-            )),
+    final eps = _d?['episodes'] is Map ? Map<String, dynamic>.from(_d!['episodes'] as Map) : <String, dynamic>{};
+    final seasons = eps.keys.toList()..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
+    final list = [for (final e in (eps[_season] as List? ?? const [])) if (e is Map) Map<String, dynamic>.from(e)];
+    return Scaffold(
+      backgroundColor: K.bg,
+      body: Directionality(textDirection: TextDirection.rtl, child: Padding(
+        padding: const EdgeInsets.fromLTRB(48, 32, 48, 24),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          ClipRRect(borderRadius: BorderRadius.circular(14), child: NetImg(Catalog.img(widget.s), w: 170, h: 250, fallback: '${widget.s['name'] ?? ''}')),
+          const SizedBox(width: 28),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${widget.s['name'] ?? ''}', style: K.s(24, w: FontWeight.w900)),
+            const SizedBox(height: 12),
+            if (_loading) const Padding(padding: EdgeInsets.all(30), child: Loading())
+            else if (eps.isEmpty) Text('الحلقات غير متاحة الآن', style: K.s(14, c: K.t2))
+            else ...[
+              SizedBox(height: 40, child: ListView(scrollDirection: Axis.horizontal, children: [
+                for (final s in seasons) Padding(padding: const EdgeInsets.only(left: 8), child: TvFocus(
+                  autofocus: s == _season, radius: 8, scale: 1.03,
+                  onTap: () => setState(() => _season = s), onFocus: (f) { if (f) setState(() => _season = s); },
+                  child: Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      color: s == _season ? K.gold : K.card,
+                      child: Text('الموسم $s', style: K.s(13, w: FontWeight.w800, c: s == _season ? Colors.black : K.t1))),
+                )),
+              ])),
+              const SizedBox(height: 14),
+              Expanded(child: ListView.separated(
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                itemBuilder: (_, i) {
+                  final e = list[i];
+                  return TvFocus(radius: 8, scale: 1.01, onTap: () => PlayerPage.open(context, [
+                    for (final x in list) PlayItem(title: '${widget.s['name'] ?? ''} — ${x['title'] ?? 'الحلقة ${x['episode_num'] ?? ''}'}',
+                        url: () => Brain.episode(x['id'], '${x['container_extension'] ?? ''}')),
+                  ], i), child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10), color: K.card,
+                    child: Row(children: [
+                      Text('${e['episode_num'] ?? i + 1}', style: K.s(15, w: FontWeight.w900, c: K.gold)),
+                      const SizedBox(width: 14),
+                      Expanded(child: Text('${e['title'] ?? 'الحلقة ${e['episode_num'] ?? i + 1}'}', maxLines: 1, overflow: TextOverflow.ellipsis, style: K.s(13.5))),
+                      const Icon(Icons.play_circle_outline_rounded, color: K.t3, size: 20),
+                    ]),
+                  ));
+                },
+              )),
+            ],
           ])),
-    ]);
+        ]),
+      )),
+    );
   }
+}
+
+// ── بحث (لوحة أحرف بالريموت بلا كيبورد) ──────────────────────────
+class SearchPage extends StatefulWidget {
+  const SearchPage({super.key});
+  @override State<SearchPage> createState() => _SearchPageState();
+}
+
+class _SearchPageState extends State<SearchPage> {
+  String _q = '';
+  static const _keys = 'ابتثجحخدذرزسشصضطظعغفقكلمنهويةى 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  Timer? _deb;
+  List<Map<String, dynamic>> _res = [];
+
+  void _run() {
+    _deb?.cancel();
+    _deb = Timer(const Duration(milliseconds: 250), () {
+      final q = _q.trim().toLowerCase();
+      if (q.length < 2) { setState(() => _res = []); return; }
+      bool hit(Map m) => '${m['name'] ?? ''}'.toLowerCase().contains(q);
+      setState(() => _res = [
+        ...Catalog.live.where(hit).take(12).map((e) => {...e, '_k': 'live'}),
+        ...Catalog.movies.where(hit).take(24).map((e) => {...e, '_k': 'movie'}),
+        ...Catalog.series.where(hit).take(24).map((e) => {...e, '_k': 'series'}),
+      ]);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(width: 300, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10), color: K.card,
+            child: Text(_q.isEmpty ? 'اكتب اسم فيلم أو مسلسل أو قناة' : _q, style: K.s(15, c: _q.isEmpty ? K.t3 : K.t1))),
+        const SizedBox(height: 10),
+        Wrap(spacing: 5, runSpacing: 5, children: [
+          for (final ch in _keys.split('')) TvFocus(radius: 6, scale: 1.12, autofocus: ch == 'ا',
+            onTap: () { setState(() => _q += ch); _run(); },
+            child: Container(width: 34, height: 32, alignment: Alignment.center, color: K.card,
+                child: Text(ch == ' ' ? '␣' : ch, style: K.s(13.5, w: FontWeight.w700)))),
+          TvFocus(radius: 6, onTap: () { if (_q.isNotEmpty) setState(() => _q = _q.substring(0, _q.length - 1)); _run(); },
+            child: Container(width: 73, height: 32, alignment: Alignment.center, color: K.card, child: const Icon(Icons.backspace_outlined, size: 17, color: K.t1))),
+          TvFocus(radius: 6, onTap: () { setState(() { _q = ''; _res = []; }); },
+            child: Container(width: 73, height: 32, alignment: Alignment.center, color: K.card, child: Text('مسح', style: K.s(13)))),
+        ]),
+      ])),
+      const SizedBox(width: 24),
+      Expanded(child: _res.isEmpty
+          ? Center(child: Text(_q.length < 2 ? 'النتائج تظهر هنا' : 'لا نتائج', style: K.s(14, c: K.t3)))
+          : GridView.builder(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: PosterCard.w + 14, mainAxisExtent: PosterCard.h + 34,
+                  crossAxisSpacing: 14, mainAxisSpacing: 8),
+              itemCount: _res.length,
+              itemBuilder: (_, i) {
+                final m = _res[i];
+                return PosterCard(m: m, img: Catalog.img(m), onTap: () {
+                  if (m['_k'] == 'live') { playChannels(context, [m], 0); }
+                  else if (m['_k'] == 'series') { openSeries(context, m); }
+                  else { openMovie(context, m); }
+                });
+              })),
+    ]),
+  );
+}
+
+// ── المزيد: الاشتراك · الحساب · الدعم ────────────────────────────
+class MorePage extends StatelessWidget {
+  const MorePage({super.key});
+  @override
+  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.fromLTRB(28, 26, 28, 30), children: [
+    Text('حسابي', style: K.s(20, w: FontWeight.w900)),
+    const SizedBox(height: 14),
+    Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: K.card, borderRadius: BorderRadius.circular(14)),
+      child: Row(children: [
+        Icon(Sub.active ? Icons.verified_rounded : Icons.error_outline_rounded, color: Sub.active ? K.green : K.red, size: 30),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(Sub.active ? 'اشتراك فعّال' : 'لا يوجد اشتراك فعّال', style: K.s(16, w: FontWeight.w800)),
+          if (Sub.expiry != null) Text('ينتهي ${Sub.expiry!.year}/${Sub.expiry!.month}/${Sub.expiry!.day}', style: K.s(13, c: K.t2)),
+          if (Sub.agent.isNotEmpty) Text('وكيلك: ${Sub.agent}', style: K.s(12.5, c: K.t3)),
+        ])),
+      ])),
+    const SizedBox(height: 14),
+    Text('للتجديد أو تغيير الباقة استخدم تطبيق TOTV+ على هاتفك أو تواصل مع وكيلك.', style: K.s(13, c: K.t2, h: 1.6)),
+    const SizedBox(height: 22),
+    Wrap(spacing: 12, runSpacing: 12, children: [
+      TvFocus(radius: 10, onTap: () { Sub.load(); Catalog.load(); toast(context, 'جاري التحديث…'); },
+        child: _btn(Icons.sync_rounded, 'تحديث المحتوى')),
+      TvFocus(radius: 10, onTap: () async {
+        await Auth.signOut();
+        if (context.mounted) Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const PairScreen()), (_) => false);
+      }, child: _btn(Icons.logout_rounded, 'فصل هذه الشاشة')),
+    ]),
+    const SizedBox(height: 30),
+    Text('TOTV+ للشاشات · الإصدار $kVersion', style: K.s(11.5, c: K.t3)),
+  ]);
+
+  static Widget _btn(IconData i, String t) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12), color: K.card,
+    child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(i, size: 19, color: K.t1), const SizedBox(width: 8), Text(t, style: K.s(14, w: FontWeight.w700))]));
 }
