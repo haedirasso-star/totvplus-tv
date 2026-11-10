@@ -3,6 +3,9 @@ name: Build TOTV+ TV APK
 on:
   workflow_dispatch:   # يدوي فقط — لا بناء تلقائي (اسأل قبل البناء)
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -84,3 +87,13 @@ jobs:
           name: totvplus-tv-apk
           path: out/*.apk
           if-no-files-found: error
+
+      # رابط تحميل عام ثابت (المستودع عام): فرع apk
+      - name: Publish APKs to apk branch
+        run: |
+          cd "$RUNNER_TEMP" && mkdir -p apk && cd apk && git init -q && git checkout -q -b apk
+          cp "$GITHUB_WORKSPACE"/out/*.apk .
+          git config user.name ci; git config user.email ci@users.noreply.github.com
+          git add . && git commit -qm "TV apk ${{ github.run_id }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk
+
